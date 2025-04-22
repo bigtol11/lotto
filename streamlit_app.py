@@ -1,7 +1,11 @@
 # streamlit_app.py
 
 import streamlit as st
-# 현재 등록된 Secrets 키 목록을 화면에 출력합니다.
+
+# ─── 1) 페이지 설정: 반드시 첫 번째 Streamlit 호출 ─────────────────────────
+st.set_page_config(page_title="Lotto Predictor v40.0", layout="wide")
+
+# ─── 2) 디버그: 로드된 Secret 키 목록 확인 ───────────────────────────────
 st.write("Loaded secrets keys:", list(st.secrets.keys()))
 
 import pandas as pd
@@ -12,10 +16,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 from sklearn.neural_network import MLPClassifier
 from sklearn.ensemble import RandomForestClassifier
 
-st.set_page_config(page_title="Lotto Predictor v40.0", layout="wide")
 st.title("🎯 Lotto Prediction Web App (v40.0 GA Optimized)")
 
-# 1) 구글 시트 인증 & 로드
+# ─── 3) Google Sheets 인증 & 로드 ─────────────────────────────────────────
 scope = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",
@@ -30,14 +33,15 @@ ws = gc.open("lotto").sheet1
 def load_sheet() -> pd.DataFrame:
     data = ws.get_all_records()
     df = pd.DataFrame(data)
-    df.columns = ["회차"] + [f"번호{i}" for i in range(1, 7)]
+    df.columns = ["회차"] + [f"번호{i}" for i in range(1,7)]
     return df
 
 df = load_sheet()
 nums = [f"번호{i}" for i in range(1,7)]
 
-# 2) 궤적(feature) 계산
-def coord(n): return ((n-1)%7, (n-1)//7)
+# ─── 4) Feature 계산 함수 ───────────────────────────────────────────────
+def coord(n):
+    return ((n-1)%7, (n-1)//7)
 
 @st.cache_data(ttl=3600)
 def compute_traj(df: pd.DataFrame) -> dict:
@@ -54,6 +58,7 @@ def compute_traj(df: pd.DataFrame) -> dict:
     return traj
 
 def build_features(df, traj, draw, s=30, m=100):
+    # draw가 traj에 없으면 마지막 회차로 보정
     if draw not in traj:
         draw = max(traj.keys())
     mf, sa = traj[draw]
@@ -68,13 +73,13 @@ def build_features(df, traj, draw, s=30, m=100):
     Mg, Mm, Ms = max(cg.values()), max(cm.values()) if cm else 1, max(cs.values()) if cs else 1
     return np.array([[mf, sa, cg[n]/Mg, cm[n]/Mm, cs[n]/Ms] for n in range(1,46)])
 
-# 3) 모델 학습
+# ─── 5) 모델 학습 (v35, v36, v38 메타) ───────────────────────────────────
 @st.cache_resource
 def train_models(df: pd.DataFrame):
     traj = compute_traj(df)
     max_draw = df["회차"].max() - 1
 
-    # v35 MLP
+    # v35: MLP
     mlp35 = MLPClassifier(hidden_layer_sizes=(64,32), max_iter=300, random_state=42)
     X35, y35 = [], []
     for d in range(1, max_draw+1):
@@ -83,7 +88,7 @@ def train_models(df: pd.DataFrame):
         y35.extend([1 if n in win else 0 for n in range(1,46)])
     mlp35.fit(np.vstack(X35), np.array(y35))
 
-    # v36 MLP + oversample
+    # v36: MLP + Oversampling
     mlp36 = MLPClassifier(hidden_layer_sizes=(64,32), max_iter=300, random_state=42)
     X36, y36, w36 = [], [], []
     for d in range(1, max_draw+1):
@@ -98,7 +103,7 @@ def train_models(df: pd.DataFrame):
         np.repeat(np.array(y36), w36, axis=0),
     )
 
-    # v38 Stacking RF meta
+    # v38: Stacking with RandomForest
     meta_X, meta_y = [], []
     for d in range(2, max_draw+2):
         p35 = mlp35.predict_proba(build_features(df, traj, d-1))[:,1]
@@ -115,13 +120,13 @@ def train_models(df: pd.DataFrame):
 
 mlp35, mlp36, meta = train_models(df)
 
-# 4) 예측 함수
+# ─── 6) 다음 회차 예측 함수 (GA 최적화) ─────────────────────────────────
 def predict_draw(df, mlp35, mlp36, meta, draw):
     traj = compute_traj(df)
     p35 = mlp35.predict_proba(build_features(df, traj, draw-1))[:,1]
     p36 = mlp36.predict_proba(build_features(df, traj, draw-1))[:,1]
     sp  = np.sort(p35)[::-1]
-    p37 = p35 if sp[:6].mean()-sp[6:12].mean()>=0.05 else np.ones(45)/45
+    p37 = p35 if sp[:6].mean() - sp[6:12].mean() >= 0.05 else np.ones(45)/45
     pf  = meta.predict_proba(np.vstack([p35,p36,p37]).T)[:,1]
 
     def fitness(c): return sum(pf[n-1] for n in c)
@@ -143,7 +148,8 @@ def predict_draw(df, mlp35, mlp36, meta, draw):
     for _ in range(50):
         pop = sorted(pop, key=lambda c:-fitness(c))[:50]
         new = pop.copy()
-        while len(new)<200: new.append(make_child(*random.sample(pop,2)))
+        while len(new)<200:
+            new.append(make_child(*random.sample(pop,2)))
         pop = new
 
     ranked = sorted(pop, key=lambda c:-fitness(c))
@@ -159,7 +165,7 @@ def predict_draw(df, mlp35, mlp36, meta, draw):
 
     return final
 
-# 5) UI 모드 선택
+# ─── 7) UI: 사이드바 모드 선택 & 화면 표시 ───────────────────────────────
 mode = st.sidebar.selectbox("🔧 Mode", ["Backtest","Next Draw"])
 
 if mode=="Backtest":
@@ -187,4 +193,3 @@ else:  # Next Draw
             row = [nd] + [int(x.strip()) for x in inp.split(",")]
             ws.append_row(row)
             st.success(f"Saved actual {row[1:]} for draw {nd}")
-
