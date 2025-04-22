@@ -1,4 +1,5 @@
 # streamlit_app.py
+st.write("Loaded secrets keys:", list(st.secrets.keys()))
 
 import streamlit as st
 import pandas as pd
