@@ -1,7 +1,9 @@
 # streamlit_app.py
-st.write("Loaded secrets keys:", list(st.secrets.keys()))
 
 import streamlit as st
+# 현재 등록된 Secrets 키 목록을 화면에 출력합니다.
+st.write("Loaded secrets keys:", list(st.secrets.keys()))
+
 import pandas as pd
 import numpy as np
 import collections, math, random
@@ -34,7 +36,7 @@ def load_sheet() -> pd.DataFrame:
 df = load_sheet()
 nums = [f"번호{i}" for i in range(1,7)]
 
-# 2) 피처 생성 함수
+# 2) 궤적(feature) 계산
 def coord(n): return ((n-1)%7, (n-1)//7)
 
 @st.cache_data(ttl=3600)
@@ -66,7 +68,7 @@ def build_features(df, traj, draw, s=30, m=100):
     Mg, Mm, Ms = max(cg.values()), max(cm.values()) if cm else 1, max(cs.values()) if cs else 1
     return np.array([[mf, sa, cg[n]/Mg, cm[n]/Mm, cs[n]/Ms] for n in range(1,46)])
 
-# 3) 모델 학습 (한 번만)
+# 3) 모델 학습
 @st.cache_resource
 def train_models(df: pd.DataFrame):
     traj = compute_traj(df)
@@ -157,7 +159,7 @@ def predict_draw(df, mlp35, mlp36, meta, draw):
 
     return final
 
-# 5) UI: Backtest vs Next Draw
+# 5) UI 모드 선택
 mode = st.sidebar.selectbox("🔧 Mode", ["Backtest","Next Draw"])
 
 if mode=="Backtest":
@@ -185,3 +187,4 @@ else:  # Next Draw
             row = [nd] + [int(x.strip()) for x in inp.split(",")]
             ws.append_row(row)
             st.success(f"Saved actual {row[1:]} for draw {nd}")
+
