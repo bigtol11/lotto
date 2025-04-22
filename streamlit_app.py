@@ -8,14 +8,16 @@ import gspread
 from google.oauth2.service_account import Credentials
 import pickle
 
-# 디버그: 로드된 secret 키 확인
-st.write("Loaded secrets keys:", list(st.secrets.keys()))
-
-# 페이지 설정 (반드시 다른 st.* 호출 전에)
+# ─── 1) 페이지 설정: 반드시 다른 st.* 호출 이전에 위치 ─────────────────────
 st.set_page_config(page_title="Lotto Predictor v40.0", layout="wide")
+
+# ─── 2) 앱 제목/헤더 ─────────────────────────────────────────────────────────
 st.title("🎯 Lotto Prediction Web App (v40.0 GA Optimized)")
 
-# 구글 시트 인증
+# ─── 3) 비밀키 로드 디버깅 (선택) ────────────────────────────────────────────
+st.write("Loaded secrets keys:", list(st.secrets.keys()))
+
+# ─── 4) Google Sheets 인증 ─────────────────────────────────────────────────
 scope = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",
@@ -37,6 +39,7 @@ def load_sheet() -> pd.DataFrame:
 df = load_sheet()
 nums = [f"번호{i}" for i in range(1,7)]
 
+# ─── 5) 궤적(feature) 계산 ──────────────────────────────────────────────────
 def coord(n):
     return ((n-1)%7, (n-1)//7)
 
@@ -64,10 +67,10 @@ def build_features(draw, s=30, m=100):
     Mg, Mm, Ms = max(cg.values()), max(cm.values()) if cm else 1, max(cs.values()) if cs else 1
     return np.array([[mf, sa, cg[n]/Mg, cm[n]/Mm, cs[n]/Ms] for n in range(1,46)])
 
-# 학습된 모델 로드
+# ─── 6) 학습된 모델 로드 ───────────────────────────────────────────────────
 with open("models/v35.pkl","rb") as f: model35 = pickle.load(f)
 with open("models/v36.pkl","rb") as f: model36 = pickle.load(f)
-with open("models/meta.pkl","rb") as f:   meta    = pickle.load(f)
+with open("models/meta.pkl","rb")   as f: meta    = pickle.load(f)
 
 def predict_draw(draw):
     p35 = model35.predict_proba(build_features(draw-1))[:,1]
@@ -101,7 +104,7 @@ def predict_draw(draw):
             if len(final)==10: break
     return final
 
-# 누적 백테스트
+# ─── 7) 누적 백테스트 ─────────────────────────────────────────────────────
 st.header("▶ 누적 백테스트 (1151회차부터)")
 results=[]
 for d in range(1151, df["회차"].max()+1):
@@ -113,7 +116,7 @@ bt = pd.DataFrame(results)
 st.write("평균 최대 적중 수:", bt["max_hits"].mean())
 st.write("3개 이상 적중 비율:", (bt["max_hits"]>=3).mean())
 
-# 다음 회차 예측
+# ─── 8) 다음 회차 예측 ────────────────────────────────────────────────────
 st.header("▶ 다음 회차 예측")
 next_draw = df["회차"].max()+1
 preds = predict_draw(next_draw)
