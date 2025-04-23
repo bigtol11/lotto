@@ -1,61 +1,65 @@
-# streamlit_app.py
-import streamlit as st, json, pandas as pd, numpy as np, collections, math, random, gspread
+import streamlit as st, json
 from google.oauth2.service_account import Credentials
+import gspread, pandas as pd, numpy as np, collections, math, random
 from sklearn.neural_network import MLPClassifier
 from sklearn.ensemble import RandomForestClassifier
 
-# ① 페이지 설정 (제일 먼저)
+# ① must be first
 st.set_page_config(page_title="Lotto Predictor v40.0", layout="wide")
 st.title("🎯 Lotto Prediction Web App (v40.0 GA Optimized)")
 
-# ② Secret 파싱 & 구글 시트 인증
-sa_info = json.loads(st.secrets["gcp"]["json"])
-creds   = Credentials.from_service_account_info(sa_info, scopes=[
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive",
-])
-gc      = gspread.authorize(creds)
-ws      = gc.open("lotto").sheet1
+# ② load & parse secret JSON
+raw = st.secrets["gcp"]["json"]
+raw = raw.strip()                # 앞뒤 공백/줄바꿈 제거
+sa_info = json.loads(raw)        # 여기서 JSONDecodeError 안 나야 함
 
-# ③ 데이터 로드
+# ③ Google Sheets auth
+SCOPES = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+creds = Credentials.from_service_account_info(sa_info, scopes=SCOPES)
+gc    = gspread.authorize(creds)
+ws    = gc.open("lotto").sheet1
+
+# ④ load data
 @st.cache_data(ttl=3600)
 def load_data():
     df = pd.DataFrame(ws.get_all_records())
     df.columns = ["회차"] + [f"번호{i}" for i in range(1,7)]
     return df
+
 df   = load_data()
 nums = [f"번호{i}" for i in range(1,7)]
-st.write(f"▶ Google Sheet에서 {len(df)}개 레코드 로드 완료")
+st.write(f"▶ Loaded {len(df)} records from Google Sheet")
 
-# ④ Feature(궤적) 계산
-def coord(n): return ((n-1)%7, (n-1)//7)
+# ⑤ features
+def coord(n): return ((n-1)%7,(n-1)//7)
 traj = {}
 for _,r in df.iterrows():
-    d    = r["회차"]
-    arr  = sorted([r[n] for n in nums])
-    cs   = [coord(x) for x in arr]
-    dts  = [math.hypot(x2-x1,y2-y1) for (x1,y1),(x2,y2) in zip(cs,cs[1:])]
+    d   = r["회차"]
+    arr = sorted(r[nums])
+    cs  = [coord(x) for x in arr]
+    dts = [math.hypot(x2-x1,y2-y1) for (x1,y1),(x2,y2) in zip(cs,cs[1:])]
     traj[d] = (np.mean(dts), np.std(dts))
 
 def build_features(draw,s=30,m=100):
     mf,sa = traj[draw]
-    past  = df[df["회차"]<=draw][nums].values.flatten()
-    mid   = df[(df["회차"]>draw-m)&(df["회차"]<=draw)][nums].values.flatten()
-    short = df[(df["회차"]>draw-s)&(df["회차"]<=draw)][nums].values.flatten()
+    past   = df[df["회차"]<=draw][nums].values.flatten()
+    mid    = df[(df["회차"]>draw-m)&(df["회차"]<=draw)][nums].values.flatten()
+    short  = df[(df["회차"]>draw-s)&(df["회차"]<=draw)][nums].values.flatten()
     cg,cm,cs = collections.Counter(past),collections.Counter(mid),collections.Counter(short)
-    Mg,Mm,Ms = max(cg.values()), max(cm.values()) if cm else 1, max(cs.values()) if cs else 1
-    return np.array([[mf,sa, cg[n]/Mg, cm[n]/Mm, cs[n]/Ms] for n in range(1,46)])
+    Mg = max(cg.values()); Mm = max(cm.values()) if cm else 1; Ms = max(cs.values()) if cs else 1
+    return np.array([[mf,sa,cg[n]/Mg,cm[n]/Mm,cs[n]/Ms] for n in range(1,46)])
 
-# ⑤ 모델 불러오기 (사전에 모델 파일 v35.pkl,v36.pkl,meta.pkl 커밋 필요)
+# ⑥ load models (must be pre-committed under models/)
 import pickle
 m35  = pickle.load(open("models/v35.pkl","rb"))
 m36  = pickle.load(open("models/v36.pkl","rb"))
 meta = pickle.load(open("models/meta.pkl","rb"))
 
-# ⑥ 예측 함수
-def predict_draw(draw):
-    p35 = m35.predict_proba(build_features(draw-1))[:,1]
-    p36 = m36.predict_proba(build_features(draw-1))[:,1]
+# ⑦ predict function
+def predict_draw(dr):
+    F   = build_features(dr-1)
+    p35 = m35.predict_proba(F)[:,1]
+    p36 = m36.predict_proba(F)[:,1]
     sp  = np.sort(p35)[::-1]
     p37 = p35 if sp[:6].mean()-sp[6:12].mean()>=0.05 else np.ones(45)/45
     pf  = meta.predict_proba(np.vstack([p35,p36,p37]).T)[:,1]
@@ -80,18 +84,18 @@ def predict_draw(draw):
             if len(final)==10: break
     return final
 
-# ⑦ UI: Predict / Backtest
+# ⑧ UI tabs
 tab1,tab2 = st.tabs(["Predict","Backtest"])
 with tab1:
-    nd= int(df["회차"].max()+1)
-    st.write(f"▶ Predicting draw {nd}")
-    if st.button("Generate 10 sets"):
-        out=pd.DataFrame({"Set":range(1,11),"Nums":predict_draw(nd)})
+    nd = int(df["회차"].max()+1)
+    st.subheader(f"Predict Draw {nd}")
+    if st.button("Generate"):
+        out = pd.DataFrame({"Set":range(1,11),"Nums":predict_draw(nd)})
         st.dataframe(out)
 
 with tab2:
-    st.write("▶ Backtest 1151→Last")
-    if st.button("Run Backtest"):
+    st.subheader("Backtest 1151→Last")
+    if st.button("Run"):
         res=[]
         for d in range(1151,int(df["회차"].max())):
             hits=[len(set(s)&set(df[df["회차"]==d+1][nums].iloc[0])) for s in predict_draw(d+1)]
